@@ -3,7 +3,13 @@ export default [
     files: ["**/*.js"],
     languageOptions: {
       ecmaVersion: 2021,
-      sourceType: "script"
+      sourceType: "script",
+      globals: {
+        SpreadsheetApp: "readonly",
+        Logger: "readonly",
+        Utilities: "readonly",
+        Session: "readonly"
+      }
     },
     rules: {
       "no-unused-vars": "warn",
