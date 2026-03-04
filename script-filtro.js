@@ -1,4 +1,4 @@
-/* global CacheService, LockService, PropertiesService, SpreadsheetApp, Logger, Utilities, Session */
+/* global CacheService, LockService, PropertiesService */
 /* eslint-disable no-unused-vars */
 
 /**
@@ -1490,3 +1490,4 @@ function arquivarFechamentoMensal() {
 function obterLayout(nomeAba) {
   return (nomeAba === PLANILHA_1414) ? "1414" : "LOTE";
 }
+
