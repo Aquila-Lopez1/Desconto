@@ -1,3 +1,6 @@
+/* global CacheService, LockService, PropertiesService, SpreadsheetApp, Logger, Utilities, Session */
+/* eslint-disable no-unused-vars */
+
 /**
  * SISTEMA DE GESTÃO DE DESCONTOS E AUXÍLIOS
  * Versão: 10.0 (Diamond Edition - Arquitetura Sênior & Robustez Total)
@@ -68,7 +71,7 @@ const FERIADOS_RAW = [
   new Date(2025, 5, 19), new Date(2025, 5, 20), new Date(2025, 7, 15), new Date(2025, 9, 27),
   new Date(2025, 10, 20), new Date(2025, 10, 21), new Date(2025, 11, 17), new Date(2025, 11, 24),
   new Date(2025, 11, 25), new Date(2025, 11, 26),new Date(2025, 11, 27), new Date(2025, 11, 31), 
-  new Date(2026, 0, 1), new Date(2026, 1, 16), new Date(2026, 1, 17), //new Date(2026, 1, 18),
+  new Date(2026, 0, 1), new Date(2026, 1, 16), new Date(2026, 1, 17),
   new Date(2026, 3, 3), new Date(2026, 3, 21), new Date(2026, 4, 1), new Date(2026, 5, 4), 
   new Date(2026, 7, 15), new Date(2026, 8, 7), new Date(2026, 9, 12), new Date(2026, 10, 2),  
   new Date(2026, 10, 15), new Date(2026, 10, 20), new Date(2026, 11, 8), new Date(2026, 11, 17), 
@@ -78,7 +81,6 @@ const FERIADOS_SET = new Set(
   FERIADOS_RAW.map(d => Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd"))
 );
 
-// GESTÃO DE CACHE (LRU - Least Recently Used)
 var CACHE_NORMALIZACAO = {};
 var CACHE_KEYS = [];
 var CACHE_DATAS_OBJ = {};
@@ -121,7 +123,6 @@ function onEdit(e) {
   var layout = obterLayout(sheetName);
   var colMotivo = (layout === "1414") ? (COLUNAS_CFG.P1414.MOTIVO + 1) : (COLUNAS_CFG.LOTE.MOTIVO + 1);
   
-  // AÇÃO 1: NORMALIZAÇÃO VISUAL
   if (col === colMotivo) {
     var valorAtual = e.range.getValue(); 
     if (valorAtual && typeof valorAtual === 'string') {
@@ -132,7 +133,6 @@ function onEdit(e) {
     }
   }
 
-  // AÇÃO 2: FILA DE PROCESSAMENTO
   if (col === 1 || col === colMotivo) {
     var cpf = sheet.getRange(row, 1).getValue();
     if (cpf) fila_registrarAlteracao(cpf);
@@ -148,15 +148,15 @@ function fila_registrarAlteracao(cpf) {
   var lock = LockService.getScriptLock();
   try {
     if (lock.tryLock(3000)) {
-      const CHAVE = "FILA_CPFS_ALTERADOS";
+      const CHAVE_FILA = "FILA_CPFS_ALTERADOS";
       var props = PropertiesService.getScriptProperties();
-      var filaStr = props.getProperty(CHAVE);
+      var filaStr = props.getProperty(CHAVE_FILA);
       var fila = filaStr ? JSON.parse(filaStr) : [];
       
       var cpfStr = cpf.toString().trim();
       if (fila.indexOf(cpfStr) === -1) {
         fila.push(cpfStr);
-        props.setProperty(CHAVE, JSON.stringify(fila));
+        props.setProperty(CHAVE_FILA, JSON.stringify(fila));
       }
     }
   } catch (e) {
@@ -167,11 +167,11 @@ function fila_registrarAlteracao(cpf) {
 }
 
 function fila_lerELimpar() {
-  const CHAVE = "FILA_CPFS_ALTERADOS";
+  const CHAVE_FILA = "FILA_CPFS_ALTERADOS";
   var props = PropertiesService.getScriptProperties();
-  var filaStr = props.getProperty(CHAVE);
+  var filaStr = props.getProperty(CHAVE_FILA);
   if (!filaStr) return [];
-  props.deleteProperty(CHAVE);
+  props.deleteProperty(CHAVE_FILA);
   return JSON.parse(filaStr);
 }
 
@@ -204,7 +204,7 @@ function executarProcessamentoGlobalForce() {
   }
   try {
     CacheService.getScriptCache().put("SISTEMA_OCUPADO", "true", 300);
-    limparCachesExecucao(); // [NOVO] Limpeza explícita
+    limparCachesExecucao(); 
     
     executarProcessamentoGlobal(true, null); 
     SpreadsheetApp.getActiveSpreadsheet().toast('Atualização Completa Concluída!');
@@ -218,7 +218,7 @@ function executarProcessamentoGlobalForce() {
 }
 
 // =================================================================================
-// 4. MOTOR DE PROCESSAMENTO (Map-Reduce + Leitura Única)
+// 4. MOTOR DE PROCESSAMENTO
 // =================================================================================
 
 function carregarDadosGlobais(ss) {
@@ -235,7 +235,6 @@ function carregarDadosGlobais(ss) {
     }
     
     var lastCol = sheet.getLastColumn();
-    // Leitura única para evitar ir ao Google Sheets várias vezes
     var range = sheet.getRange(2, 1, lastRow - 1, lastCol);
     
     dadosGlobais[nomeAba] = {
@@ -255,21 +254,15 @@ function executarProcessamentoGlobal(forcar, listaCpfs) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var setCpfs = new Set(listaCpfs || []); 
 
-  // 1. LEITURA ÚNICA
   var dadosGlobais = carregarDadosGlobais(ss);
   
-  // 2. PRÉ-PROCESSAMENTO (Em memória)
-  // O mapeamento de conflitos agora roda PRIMEIRO
   var objConflitosGlobais = mapearConflitosGlobaisMemoria(dadosGlobais);
-  
-  // Passamos os conflitos para o Integral ignorar o que foi absorvido
   var mapaAbsorvidas = sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobais); 
   var historicoPublicado = carregarMapaHistorico(ss); 
 
   var cacheD89 = {}; 
   var cacheDiasUteis = {};
 
-  // 3. PROCESSAMENTO PRINCIPAL
   for (var nomeAba in dadosGlobais) {
     var pacote = dadosGlobais[nomeAba];
     if (pacote.valores.length === 0) continue;
@@ -285,7 +278,6 @@ function executarProcessamentoGlobal(forcar, listaCpfs) {
       historicoPublicado
     );
 
-    // 4. ESCRITA DINÂMICA
     if (pacote.range && resultado.valores.length > 0) {
       var sheet = pacote.range.getSheet();
       var numRows = resultado.valores.length;
@@ -307,7 +299,6 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
      return { valores: [], cores: [], notas: [] };
   }
 
-  // --- FASE 1: SCANNER & BUILDER ---
   var layout = obterLayout(nomeAba);
   var idxMotivo = (layout === "1414") ? COLUNAS_CFG.P1414.MOTIVO : COLUNAS_CFG.LOTE.MOTIVO; 
   var minCols = (layout === "1414") ? 8 : 7;
@@ -325,15 +316,15 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
   
   motivosUnicos.forEach(mRaw => {
     var mNorm = normalizarMotivoLote(mRaw, layout); 
-    var datas = extrairDatasComCache(mNorm);        
+    var infosData = extrairDatasComCache(mNorm);        
     
     var info = {
       normalizado: mNorm, datas: null, diasUteis: 0,
       mesIndex: -1, mesNome: "", anoStr: "", legislacao: "", chavePeriodo: ""
     };
 
-    if (datas) {
-      info.datas = datas;
+    if (infosData) {
+      info.datas = infosData;
       
       var regexMultiplos = /In[íi]cio:\s*(\d{2}\/\d{2}\/\d{4})[\s\S]*?T[ée]rmino:\s*(\d{2}\/\d{2}\/\d{4})/gi;
       var matchMulti;
@@ -356,16 +347,16 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
           if (matchDiasExp) {
               info.diasUteis = parseInt(matchDiasExp[1], 10);
           } else {
-              info.diasUteis = calcularDiasUteisComRegra(datas.inicio, datas.fim, mNorm, cacheDiasUteis);
+              info.diasUteis = calcularDiasUteisComRegra(infosData.inicio, infosData.fim, mNorm, cacheDiasUteis);
           }
       }
 
-      info.mesIndex = datas.inicio.getMonth();
-      info.mesNome = obterNomesMesesIntervalo(datas.inicio, datas.fim);
-      info.anoStr = datas.inicio.getFullYear().toString();
+      info.mesIndex = infosData.inicio.getMonth();
+      info.mesNome = obterNomesMesesIntervalo(infosData.inicio, infosData.fim);
+      info.anoStr = infosData.inicio.getFullYear().toString();
       
-      var inicioStr = Utilities.formatDate(datas.inicio, Session.getScriptTimeZone(), "dd/MM/yyyy");
-      var fimStr = Utilities.formatDate(datas.fim, Session.getScriptTimeZone(), "dd/MM/yyyy");
+      var inicioStr = Utilities.formatDate(infosData.inicio, Session.getScriptTimeZone(), "dd/MM/yyyy");
+      var fimStr = Utilities.formatDate(infosData.fim, Session.getScriptTimeZone(), "dd/MM/yyyy");
       info.chavePeriodo = "|" + inicioStr + "|" + fimStr; 
       
       if (layout !== "1414") {
@@ -375,26 +366,25 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
     MAPA_INTELIGENCIA[mRaw] = info;
   });
 
-  // --- FASE 2: APLICAÇÃO ---
   var outputValores = [];
   var outputCores = [];
   var outputNotas = [];
   var mapaDuplicatasLocal = {}; 
 
-  for (var i = 0; i < dados.length; i++) {
-    var linhaValores = dados[i].slice();
+  for (var idxDados = 0; idxDados < dados.length; idxDados++) {
+    var linhaValores = dados[idxDados].slice();
     while (linhaValores.length < larguraSaida) linhaValores.push(""); 
     
-    var linhaCores = (backgrounds[i] || []).slice();
+    var linhaCores = (backgrounds[idxDados] || []).slice();
     while (linhaCores.length < larguraSaida) linhaCores.push(null);
     
-    var linhaNotas = (notes[i] || []).slice();
+    var linhaNotas = (notes[idxDados] || []).slice();
     while (linhaNotas.length < larguraSaida) linhaNotas.push("");
 
-    var cpf = (linhaValores[0] || "").toString().trim();
+    var cpfLinha = (linhaValores[0] || "").toString().trim();
     
-    if (!forcar && cpf && !setCpfs.has(cpf)) {
-      var chaveConf = nomeAba + "|" + i;
+    if (!forcar && cpfLinha && !setCpfs.has(cpfLinha)) {
+      var chaveConf = nomeAba + "|" + idxDados;
       if (objConflitosGlobais.notas[chaveConf]) {
          linhaCores.fill(CORES.SOBREPOSICAO);
          linhaNotas.fill(objConflitosGlobais.notas[chaveConf]);
@@ -414,30 +404,28 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
 
     var cor = CORES.PADRAO;
     var nota = "";
-    var datas = null;
+    var infoDatasFinal = null;
     var diasUteis = 0;
     var chaveHistorico = null;
 
-    if (cpf && infoMotivo && infoMotivo.datas) {
-        // Clonamos para não afetar as outras linhas que compartilham o texto
-        datas = { inicio: infoMotivo.datas.inicio, fim: infoMotivo.datas.fim };
+    if (cpfLinha && infoMotivo && infoMotivo.datas) {
+        infoDatasFinal = { inicio: infoMotivo.datas.inicio, fim: infoMotivo.datas.fim };
         diasUteis = infoMotivo.diasUteis;
         
-        var chaveConflito = nomeAba + "|" + i;
+        var chaveConflito = nomeAba + "|" + idxDados;
         var dataFimAjustada = objConflitosGlobais.datasAjustadas[chaveConflito];
 
-        // --- APLICA A NOVA REGRA DE CORTE DE SOBREPOSIÇÃO ---
         if (dataFimAjustada === "ABSORVIDA") {
             diasUteis = 0;
         } else if (dataFimAjustada) {
-            diasUteis = calcularDiasUteisComRegra(datas.inicio, dataFimAjustada, infoMotivo.normalizado, cacheDiasUteis);
-            datas.fim = dataFimAjustada; 
+            diasUteis = calcularDiasUteisComRegra(infoDatasFinal.inicio, dataFimAjustada, infoMotivo.normalizado, cacheDiasUteis);
+            infoDatasFinal.fim = dataFimAjustada; 
         }
 
-        var cpfLimpo = cpf.replace(/\D/g, "");
-        chaveHistorico = cpfLimpo + infoMotivo.chavePeriodo;
+        var cpfLimpoStr = cpfLinha.replace(/\D/g, "");
+        chaveHistorico = cpfLimpoStr + infoMotivo.chavePeriodo;
 
-        var d89 = buscarDadosFinanceirosD89Map(cpf, infoMotivo.mesIndex, infoMotivo.anoStr, cacheD89, ss);
+        var d89 = buscarDadosFinanceirosD89Map(cpfLinha, infoMotivo.mesIndex, infoMotivo.anoStr, cacheD89, ss);
         
         if (!d89.encontrado) {
              var mAnt = infoMotivo.mesIndex - 1; var aAnt = parseInt(infoMotivo.anoStr);
@@ -445,8 +433,8 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
              var mPos = infoMotivo.mesIndex + 1; var aPos = parseInt(infoMotivo.anoStr);
              if (mPos > 11) { mPos = 0; aPos++; }
 
-             var d89Ant = buscarDadosFinanceirosD89Map(cpf, mAnt, aAnt.toString(), cacheD89, ss);
-             var d89Pos = buscarDadosFinanceirosD89Map(cpf, mPos, aPos.toString(), cacheD89, ss);
+             var d89Ant = buscarDadosFinanceirosD89Map(cpfLinha, mAnt, aAnt.toString(), cacheD89, ss);
+             var d89Pos = buscarDadosFinanceirosD89Map(cpfLinha, mPos, aPos.toString(), cacheD89, ss);
 
              if (d89Ant.encontrado && d89Pos.encontrado) {
                 d89 = d89Pos; 
@@ -482,9 +470,9 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
         }
     }
 
-    var chvConflitoFinal = nomeAba + "|" + i;
+    var chvConflitoFinal = nomeAba + "|" + idxDados;
     var ehAbsorvidaPorConflito = (objConflitosGlobais.datasAjustadas[chvConflitoFinal] === "ABSORVIDA");
-    var corOriginal = backgrounds[i] ? backgrounds[i][0] : null;
+    var corOriginal = backgrounds[idxDados] ? backgrounds[idxDados][0] : null;
 
     if (mapaHistorico && chaveHistorico && mapaHistorico.has(chaveHistorico)) {
        cor = CORES.DUPLICATA; nota = "🔴 Desconto JÁ PUBLICADO.";
@@ -493,17 +481,14 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
        cor = CORES.ABSORVIDO; 
        nota = objConflitosGlobais.notas[chvConflitoFinal];
     }
-    else if (datas && diasUteis === 0) {
+    else if (infoDatasFinal && diasUteis === 0) {
        cor = CORES.DUPLICATA; nota = "🔴 ERRO: 0 dias úteis.";
     }
-    else if (linhasAbsorvidas && linhasAbsorvidas[i + 2]) {
+    else if (linhasAbsorvidas && linhasAbsorvidas[idxDados + 2]) {
        cor = CORES.ABSORVIDO; nota = "✅ Absorvido.";
     } 
-    // --- LÓGICA DE WORKFLOW MANUAL (A COR VERDE) ---
     else if (corOriginal === CORES.RESTITUICAO) {
        cor = CORES.RESTITUICAO;
-       
-       // Verifica qual era o problema original que o sistema encontraria
        if (cor === CORES.SUSPEITA_FERIAS || nota === "ℹ️ Possibilidade de férias.") {
            nota = "✅ Constatado férias no mês de referencia.";
        } 
@@ -514,9 +499,7 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
            nota = "🟢 Manual.";
        }
     }
-    // --- SE NÃO FOI VALIDADO MANUALMENTE, EXIBE OS ALERTAS PADRÕES ---
     else if (nota === "ℹ️ Possibilidade de férias.") {
-       // Mantém a cor amarela de invalido/suspeita que foi definida lá em cima na busca da D89
        cor = CORES.SUSPEITA_FERIAS; 
     }
     else if (objConflitosGlobais.notas[chvConflitoFinal]) {
@@ -524,9 +507,9 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
        nota = objConflitosGlobais.notas[chvConflitoFinal];
     }
 
-    if (cpf && datas && chaveHistorico) {
+    if (cpfLinha && infoDatasFinal && chaveHistorico) {
        if (!mapaDuplicatasLocal[chaveHistorico]) mapaDuplicatasLocal[chaveHistorico] = [];
-       mapaDuplicatasLocal[chaveHistorico].push(i);
+       mapaDuplicatasLocal[chaveHistorico].push(idxDados);
     }
 
     linhaCores.fill(cor);
@@ -549,7 +532,6 @@ function processarBatchCompleto(dados, backgrounds, notes, linhasAbsorvidas, ss,
   return { valores: outputValores, cores: outputCores, notas: outputNotas };
 }
 
-
 function mapearConflitosGlobaisMemoria(dadosGlobais) {
   var timelineGlobal = {}; 
   var mapaConflitos = { notas: {}, datasAjustadas: {} };
@@ -560,18 +542,18 @@ function mapearConflitosGlobaisMemoria(dadosGlobais) {
     var idxMotivo = (pacote.layout === "1414") ? COLUNAS_CFG.P1414.MOTIVO : COLUNAS_CFG.LOTE.MOTIVO;
 
     for (var i = 0; i < dados.length; i++) {
-      var cpf = (dados[i][0] || "").toString().trim();
+      var cpfLinha = (dados[i][0] || "").toString().trim();
       var motivo = (dados[i][idxMotivo] || "").toString().trim();
-      if (!cpf || !motivo) continue;
+      if (!cpfLinha || !motivo) continue;
 
       var motivoNorm = normalizarMotivoLote(motivo, pacote.layout); 
-      var datas = extrairDatasComCache(motivoNorm); 
+      var datasObj = extrairDatasComCache(motivoNorm); 
 
-      if (datas) {
-        if (!timelineGlobal[cpf]) timelineGlobal[cpf] = [];
-        timelineGlobal[cpf].push({
-          inicio: datas.inicio.getTime(),
-          fim: datas.fim.getTime(),
+      if (datasObj) {
+        if (!timelineGlobal[cpfLinha]) timelineGlobal[cpfLinha] = [];
+        timelineGlobal[cpfLinha].push({
+          inicio: datasObj.inicio.getTime(),
+          fim: datasObj.fim.getTime(),
           motivoResumo: motivo.split('-')[0].substring(0, 30) + "...",
           aba: nomeAba,
           linhaIndex: i 
@@ -580,10 +562,9 @@ function mapearConflitosGlobaisMemoria(dadosGlobais) {
     }
   }
 
-  for (var cpf in timelineGlobal) {
-    var eventos = timelineGlobal[cpf];
+  for (var cpfKey in timelineGlobal) {
+    var eventos = timelineGlobal[cpfKey];
     
-    // Ordena por início crescente. Se o início for igual, a mais longa vem primeiro (para abraçar a menor)
     eventos.sort(function(a, b) {
         if (a.inicio !== b.inicio) return a.inicio - b.inicio;
         return b.fim - a.fim;
@@ -595,34 +576,27 @@ function mapearConflitosGlobaisMemoria(dadosGlobais) {
         var evAtual = eventos[k];
         var chaveAtual = evAtual.aba + "|" + evAtual.linhaIndex;
 
-        // Verifica se a dispensa atual bate de frente com a dispensa "Dominante" anterior
         if (eventoDominante && evAtual.inicio <= eventoDominante.fimEfetivo.getTime()) {
-            
-            // CÁLCULO 1: ENGOLIMENTO (evAtual está 100% dentro da dominante)
             if (evAtual.fim <= eventoDominante.fimEfetivo.getTime()) {
                 mapaConflitos.notas[chaveAtual] = "✅ Totalmente absorvida por: " + eventoDominante.motivoResumo;
                 mapaConflitos.datasAjustadas[chaveAtual] = "ABSORVIDA";
             } 
-            // CÁLCULO 2: PASSAR O BASTÃO (evAtual começa dentro mas termina depois)
             else {
                 var chaveDominante = eventoDominante.aba + "|" + eventoDominante.linhaIndex;
                 var dataCorte = new Date(evAtual.inicio);
                 dataCorte.setDate(dataCorte.getDate() - 1);
                 dataCorte.setHours(0,0,0,0);
 
-                // A dominante perde a força no dia anterior ao início da atual
                 eventoDominante.fimEfetivo = dataCorte;
                 mapaConflitos.datasAjustadas[chaveDominante] = eventoDominante.fimEfetivo;
 
                 mapaConflitos.notas[chaveAtual] = (mapaConflitos.notas[chaveAtual] || "") + "\n⚠️ Sobreposição com: " + eventoDominante.motivoResumo;
                 mapaConflitos.notas[chaveDominante] = (mapaConflitos.notas[chaveDominante] || "") + "\n⚠️ Sobreposição com: " + evAtual.motivoResumo;
 
-                // A atual passa a ser a nova dominante
                 eventoDominante = evAtual;
                 eventoDominante.fimEfetivo = new Date(evAtual.fim);
             }
         } else {
-            // Sem conflito (passou livre)
             eventoDominante = evAtual;
             eventoDominante.fimEfetivo = new Date(evAtual.fim);
         }
@@ -645,15 +619,13 @@ function sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobai
     var idxMotivo = (pacote.layout === "1414") ? COLUNAS_CFG.P1414.MOTIVO : COLUNAS_CFG.LOTE.MOTIVO;
 
     for (var i = 0; i < dados.length; i++) {
-      var cpf = (dados[i][0] || "").toString().trim();
+      var cpfLinha = (dados[i][0] || "").toString().trim();
       var motivo = (dados[i][idxMotivo] || "").toString().trim();
-      if (!cpf || !motivo) continue;
+      if (!cpfLinha || !motivo) continue;
 
-      // --- [A MÁGICA DA ABSORÇÃO NO INTEGRAL] ---
       var chaveConflito = nomeAba + "|" + i;
       var dataFimAjustada = objConflitosGlobais ? objConflitosGlobais.datasAjustadas[chaveConflito] : null;
 
-      // Se a dispensa foi 100% engolida, pula ela! Não soma dias e não entra no texto.
       if (dataFimAjustada === "ABSORVIDA") {
           continue; 
       }
@@ -664,12 +636,11 @@ function sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobai
       
       if (!infoData) continue;
 
-      // Se for apenas uma sobreposição parcial (passar o bastão), a data de término também é cortada aqui
       var dataFimReal = (dataFimAjustada instanceof Date) ? dataFimAjustada : infoData.fim;
 
       var mesIdx = infoData.inicio.getMonth();
       var ano = infoData.inicio.getFullYear().toString();
-      var chave = cpf + "||" + mesIdx + "||" + ano;
+      var chaveItem = cpfLinha + "||" + mesIdx + "||" + ano;
       
       var diasLinha = 0;
       var regexMultiplos = /In[íi]cio:\s*(\d{2}\/\d{2}\/\d{4})[\s\S]*?T[ée]rmino:\s*(\d{2}\/\d{2}\/\d{4})/gi;
@@ -685,34 +656,32 @@ function sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobai
           }
       }
 
-      // Se não era um texto picado, faz a conta com a regra oficial e a data REAL ajustada
       if (!achouMultiplos || diasLinha === 0) {
           diasLinha = calcularDiasUteisComRegra(infoData.inicio, dataFimReal, motivoNorm, cacheDiasLocal);
       }
 
-      // Rastreia as datas mínimas e máximas
-      if (!consolidado[chave]) {
-        consolidado[chave] = { 
-          cpf: cpf, mesIndex: mesIdx, anoStr: ano, dias: 0, 
+      if (!consolidado[chaveItem]) {
+        consolidado[chaveItem] = { 
+          cpf: cpfLinha, mesIndex: mesIdx, anoStr: ano, dias: 0, 
           motivos: new Set(), origens: [],
           minData: new Date(infoData.inicio.getTime()), 
           maxData: new Date(dataFimReal.getTime()) 
         };
       } else {
-        if (infoData.inicio < consolidado[chave].minData) consolidado[chave].minData = new Date(infoData.inicio.getTime());
-        if (dataFimReal > consolidado[chave].maxData) consolidado[chave].maxData = new Date(dataFimReal.getTime());
+        if (infoData.inicio < consolidado[chaveItem].minData) consolidado[chaveItem].minData = new Date(infoData.inicio.getTime());
+        if (dataFimReal > consolidado[chaveItem].maxData) consolidado[chaveItem].maxData = new Date(dataFimReal.getTime());
       }
       
-      consolidado[chave].dias += diasLinha;
-      consolidado[chave].motivos.add(motivoNorm);
-      consolidado[chave].origens.push({ sheet: nomeAba, row: i + 2 });
+      consolidado[chaveItem].dias += diasLinha;
+      consolidado[chaveItem].motivos.add(motivoNorm);
+      consolidado[chaveItem].origens.push({ sheet: nomeAba, row: i + 2 });
     }
   }
 
   var dadosFinais = [];
   
-  for (var chave in consolidado) {
-    var item = consolidado[chave];
+  for (var chaveLoop in consolidado) {
+    var item = consolidado[chaveLoop];
     var d89 = buscarDadosFinanceirosD89Map(item.cpf, item.mesIndex, item.anoStr, cacheD89, ss);
 
     if (!d89.encontrado) {
@@ -739,10 +708,7 @@ function sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobai
 
       if ((desconto + cotaParte) > (d89.valor + 1)) {
         var textoCompleto = gerarTextoLegalIntegral(item, d89, cotaParte);
-        
-        // [NOVO] Formata o mês "janeiro/fevereiro" ou "dezembro/2025, janeiro e fevereiro"
         var stringMeses = formatarMesesParaIntegral(item.minData, item.maxData);
-        // [NOVO] O ano final na coluna será sempre o ano de término (ex: 2026)
         var anoFinalStr = item.maxData.getFullYear().toString();
 
         dadosFinais.push([
@@ -756,8 +722,8 @@ function sincronizarDescontoIntegralMemoria(dadosGlobais, ss, objConflitosGlobai
   atualizarAbaDescontoIntegral(dadosFinais, ss);
   return linhasParaAbsorver;
 }
+
 function gerarTextoLegalIntegral(item, d89, cotaParte) {
-    // Pega o início real e o fim real para montar o período completo
     var mesInicio = item.minData.getMonth() + 1;
     var anoInicio = item.minData.getFullYear();
     var mesFim = item.maxData.getMonth() + 1;
@@ -770,23 +736,16 @@ function gerarTextoLegalIntegral(item, d89, cotaParte) {
     var valIntegralFmt = d89.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     var valCotaFmt = cotaParte.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
-    // --- FILTRO DE ADAPTAÇÃO PARA O DESCONTO INTEGRAL ---
-    // Ajusta os textos para combinarem com o seu cabeçalho "...por"
     var listaAdapta = Array.from(item.motivos).map(function(motivo) {
         var mLower = motivo.toLowerCase();
-        
-        // Se for dispensa ou licença, adiciona "motivo de "
         if (mLower.startsWith("dispensa") || mLower.startsWith("licença")) {
             return "motivo de " + motivo;
         } 
-        // Se for gratificação ("Por ter participado..."), remove o "Por "
         else if (mLower.startsWith("por ")) {
-            var semPor = motivo.substring(4); // Corta os 4 primeiros caracteres ("Por ")
-            // Garante que a próxima letra fique minúscula (ex: "Ter participado" vira "ter participado")
+            var semPor = motivo.substring(4); 
             return semPor.charAt(0).toLowerCase() + semPor.slice(1);
         }
-        
-        return motivo; // Retorna normal para os outros casos (núpcias, luto, etc)
+        return motivo; 
     });
 
     var textoMotivo = "";
@@ -804,6 +763,7 @@ function gerarTextoLegalIntegral(item, d89, cotaParte) {
         " Em atendimento à alínea b.3 do subitem 6.2.1 da ICA 161-16/2024 - Programa Auxílio-Transporte, seja realizado o desconto integral do benefício mensal no valor de R$ " + valIntegralFmt + "," +
         " conforme especificado abaixo de seu nome, e seja restituído por meio de receita a anular, o valor do desconto do Auxílio-Transporte, referente a 6% (seis por cento) calculados sobre 22 (vinte e dois) dias do soldo do militar, no valor de R$ " + valCotaFmt + ", realizado no período de " + strPeriodo + ".";
 }
+
 function atualizarAbaDescontoIntegral(dados, ss) {
   var sheet = ss.getSheetByName(ABA_INTEGRAL);
   if (!sheet) return;
@@ -816,25 +776,22 @@ function atualizarAbaDescontoIntegral(dados, ss) {
 }
 
 // =================================================================================
-// 5. NORMALIZAÇÃO V10.0 (ENGINE MODULAR ROBUSTA)
+// 5. NORMALIZAÇÃO V10.0
 // =================================================================================
 
 function normalizarMotivoLote(textoRaw, layout) {
   if (!textoRaw) return "";
   
-  // 1. Sanitização
   var textoLimpo = sanitizarTexto(textoRaw);
   var cacheKey = textoLimpo + "|" + (layout || "LOTE");
   
   if (CACHE_NORMALIZACAO[cacheKey]) return CACHE_NORMALIZACAO[cacheKey];
   
-  // Verificação rápida se já está padronizado
   if (/\(Ref\.:.*?\)$/i.test(textoLimpo) || /\(Ref\s.*?\)$/i.test(textoLimpo)) {
      atualizarCache(cacheKey, textoLimpo);
      return textoLimpo;
   }
 
-  // 2. Processamento
   var resultado = processarMotivo(textoLimpo, layout);
   atualizarCache(cacheKey, resultado);
   return resultado;
@@ -856,7 +813,7 @@ function atualizarCache(key, value) {
 function sanitizarTexto(texto) {
   if (!texto) return "";
   var t = texto.toString();
-  if (t.normalize) { t = t.normalize("NFC"); } // Unicode Normalization
+  if (t.normalize) { t = t.normalize("NFC"); } 
   t = t.replace(/[\u201C\u201D\u201E\u201F]/g, '"'); 
   t = t.replace(/[\u2018\u2019]/g, "'");             
   t = t.replace(/[\u2013\u2014]/g, "-");             
@@ -948,11 +905,10 @@ function extrairDados(texto, tipo) {
   }
 
   if (!dados.complemento) {
-     // [CORREÇÃO] Aceita "segundo a lista", "segundo lista", etc.
      var matchExistente = texto.match(/(,?\s*segundo\s*(?:a\s*)?lista de Atestados.*)/i);
      if (matchExistente) {
          var compl = matchExistente[1];
-         compl = compl.replace(/\s*\(\s*Ref\.:.*?\)/i, ""); // Remove referências repetidas do final
+         compl = compl.replace(/\s*\(\s*Ref\.:.*?\)/i, ""); 
          dados.complemento = compl; 
      }
   }
@@ -1002,13 +958,11 @@ function montarMotivoPadronizado(tipo, dados, layout, textoOriginal) {
        refString = prefixo + principal + compRef;
     }
     
-    // 1. SE JÁ ESTIVER PADRONIZADO
     if (textoOriginal.match(/^Por ter participado/i)) {
        var base = textoOriginal.replace(/\s*-\s*Conforme[\s\S]*/i, "");
        return base + refString;
     }
 
-    // 2. BLOCO INTELIGENTE PARA INTERVALOS PICADOS
     var matchBloco1414 = textoOriginal.match(/(?:Eventual(?:,\s*|\s+))?(?:por\s+)?(ter\s+[\s\S]*?)(?:,\s*)?no\s+per[ií]odo\s+de\s+([\s\S]*?)(?:(?:,\s*)?sendo\s+considerado)/i);
     
     if (matchBloco1414) {
@@ -1049,7 +1003,6 @@ function montarMotivoPadronizado(tipo, dados, layout, textoOriginal) {
        return descricao + strDatas + refString;
     }
 
-    // 3. PADRÃO ANTIGO 1414 (Fallback absoluto)
     if (textoOriginal.match(/(?:Início|Inicio|Período|Início e Término)[\s\S]*?(?:término|termino|fim|- Conforme)/i)) {
        var textoDescritivo = limparTextoBase(textoOriginal);
        textoDescritivo = textoDescritivo.replace(/[\s\.,;:\-]*(Início|Inicio)\s*:?\s*/i, " - Início ");
@@ -1061,8 +1014,6 @@ function montarMotivoPadronizado(tipo, dados, layout, textoOriginal) {
     if (refConteudo) refString = " (Ref.: " + refConteudo + ")";
   }
 
-  // --- A CORREÇÃO DO ESPAÇO ESTÁ AQUI ---
-  // Limpa espaços em branco e vírgulas duplicadas no começo do complemento para grudar perfeitamente
   var complementoFinal = "";
   if (dados.complemento) {
     var extraLimpo = dados.complemento.trim();
@@ -1076,6 +1027,7 @@ function montarMotivoPadronizado(tipo, dados, layout, textoOriginal) {
 // =================================================================================
 // 6. HELPERS
 // =================================================================================
+
 function calcularDiasUteisComRegra(inicio, fim, motivoNorm, cacheDias) {
   var dStart = new Date(inicio.getTime());
   dStart.setHours(0,0,0,0);
@@ -1089,53 +1041,49 @@ function calcularDiasUteisComRegra(inicio, fim, motivoNorm, cacheDias) {
   var aplicarRegra = motivosParaAbater.some(function(termo) { return mLower.includes(termo); });
 
   if (aplicarRegra) {
-      // A REGRA EXATA: O primeiro dia da dispensa é descartado.
-      // Avançamos o início da contagem no calendário para o dia seguinte.
       dStart.setDate(dStart.getDate() + 1);
   }
 
-  // Se a dispensa era de apenas 1 dia, ao avançar o dStart ele ultrapassa o dEnd, resultando em 0.
   if (dStart > dEnd) return 0;
 
-  // Agora sim, conta os dias úteis do período restante
   return contarDiasUteisComCache(dStart, dEnd, cacheDias);
 }
+
 function extrairDatasComCache(texto) {
   if (!texto) return null;
   if (CACHE_DATAS_OBJ[texto]) return CACHE_DATAS_OBJ[texto];
   
-  // Usa o extrairDatas abaixo que serve de Fallback para a lógica V10
-  var datas = extrairDatas(texto);
-  CACHE_DATAS_OBJ[texto] = datas;
-  return datas;
+  var datasObj = extrairDatas(texto);
+  CACHE_DATAS_OBJ[texto] = datasObj;
+  return datasObj;
 }
 
 function extrairDatas(texto) {
   if (!texto) return null;
 
+  var d1, d2;
+
   var match1414Novo = texto.match(/no per[ií]odo de\s+(\d{2}\/\d{2}\/\d{4})[\s,]*[aà]s?\s*\d{1,2}(?::\d{2})?\s*h?[\s,]*a\s*(\d{2}\/\d{2}\/\d{4})/i);
   if (match1414Novo) {
-     var d1 = validarData(match1414Novo[1]);
-     var d2 = validarData(match1414Novo[2]);
+     d1 = validarData(match1414Novo[1]);
+     d2 = validarData(match1414Novo[2]);
      if (d1 && d2) return {inicio: d1, fim: d2};
   }
   
   var match1414 = texto.match(/(?:In[íi]cio)[\s\.,;:\-]*(\d{2}\/\d{2}\/\d{4})[\s\S]*?(?:T[ée]rmino|Fim)[\s\.,;:\-]*(\d{2}\/\d{2}\/\d{4})/i);
   if (match1414) {
-     var d1 = validarData(match1414[1]);
-     var d2 = validarData(match1414[2]);
+     d1 = validarData(match1414[1]);
+     d2 = validarData(match1414[2]);
      if (d1 && d2) return {inicio: d1, fim: d2};
   }
 
-  // [CORREÇÃO] Aceita espaços múltiplos e não quebra com espaços duplos
   var matchPadrao = texto.match(/no per[ií]odo de\s+(\d{2}\/\d{2}\/\d{4})\s+a\s+(\d{2}\/\d{2}\/\d{4})/i);
   if (matchPadrao) {
-    var d1 = validarData(matchPadrao[1]);
-    var d2 = validarData(matchPadrao[2]);
+    d1 = validarData(matchPadrao[1]);
+    d2 = validarData(matchPadrao[2]);
     if (d1 && d2) return {inicio: d1, fim: d2};
   }
 
-  // [A MÁGICA DE PROTEÇÃO] Remove as datas soltas do GSAU, Portaria e Boletins antes de caçar as datas do período!
   var textoLimpo = texto.replace(/\(Ref\.:.*?\)/gi, " ")
                         .replace(/- Conforme o Boletim.*?(\d{2}\/\d{2}\/\d{4})/gi, " ")
                         .replace(/Boletim.*?(\d{2}\/\d{2}\/\d{4})/gi, " ")
@@ -1199,7 +1147,6 @@ function extrairDadosReferencia(t) {
     dados.boletim = tipo + " n° " + numero + dataFormatada;
   }
   
-  // [NOVO] Lê BCA longo e aceita erro de digitação "de, [data]"
   var regexBca = /(?:BCA|Boletim\s+(?:Interno\s+)?do\s+Comando\s+da\s+Aeron[áa]utica)\s*(?:N[º°o\.]?)\s*(\d+)(?:[,\s]*(?:de[\s,]*)?(\d{2}\/\d{2}\/\d{4}))?/i;
   var matchBca = t.match(regexBca);
   
@@ -1236,34 +1183,34 @@ const MAPA_NUMEROS_EXTENSO = {
 function converterExtensoParaNumero(txt) {
   if (!txt) return null;
   var t = removerAcentos(txt).toUpperCase(); 
-  for (var chave in MAPA_NUMEROS_EXTENSO) {
-    if (t.includes(chave)) return MAPA_NUMEROS_EXTENSO[chave];
+  for (var k in MAPA_NUMEROS_EXTENSO) {
+    if (t.includes(k)) return MAPA_NUMEROS_EXTENSO[k];
   }
   return null;
 }
 
 function padronizarData(dia, mes, ano) {
-  dia = dia.toString().padStart(2, '0');
+  var diaFmt = dia.toString().padStart(2, '0');
   var meses = {'jan': '01', 'fev': '02', 'mar': '03', 'abr': '04', 'mai': '05', 'jun': '06', 'jul': '07', 'ago': '08', 'set': '09', 'out': '10', 'nov': '11', 'dez': '12', 'janeiro': '01', 'fevereiro': '02', 'março': '03', 'abril': '04', 'maio': '05', 'junho': '06', 'julho': '07', 'agosto': '08', 'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12'};
   var mesFormatado = mes;
   if (isNaN(mes)) {
     var mesLimpo = mes.toLowerCase().trim().substr(0, 3);
     if (meses[mesLimpo]) mesFormatado = meses[mesLimpo];
   } else { mesFormatado = mes.toString().padStart(2, '0'); }
-  return dia + "/" + mesFormatado + "/" + ano;
+  return diaFmt + "/" + mesFormatado + "/" + ano;
 }
+
 function verificarSeEhDiaUtil(data) {
   var d = new Date(data.getTime());
   var diaSemana = d.getDay();
-  // Se for Sábado (6) ou Domingo (0), não é útil
   if (diaSemana === 0 || diaSemana === 6) return false;
   
-  // Verifica Feriados
   var dtStr = Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
   if (FERIADOS_SET.has(dtStr)) return false;
   
   return true;
 }
+
 function obterNomesMesesIntervalo(dInicio, dFim) {
   var mesesEncontrados = [];
   var atual = new Date(dInicio.getFullYear(), dInicio.getMonth(), 1);
@@ -1296,6 +1243,7 @@ function contarDiasUteisComCache(inicio, fim, cache) {
   if (cache) cache[key] = count;
   return count;
 }
+
 function formatarMesesParaIntegral(dInicio, dFim) {
   var meses = [];
   var atual = new Date(dInicio.getFullYear(), dInicio.getMonth(), 1);
@@ -1307,7 +1255,6 @@ function formatarMesesParaIntegral(dInicio, dFim) {
   while (atual <= fim && limite < 24) {
     var nomeMes = MESES_NOMES[atual.getMonth()];
     
-    // Se for quebra de ano e o mês pertencer ao ano anterior (ex: 2025), adiciona /2025
     if (crossYear && atual.getFullYear() < anoFim) {
        nomeMes += "/" + atual.getFullYear();
     }
@@ -1317,17 +1264,16 @@ function formatarMesesParaIntegral(dInicio, dFim) {
     limite++;
   }
 
-  // Se tem quebra de ano (ex: dezembro/2025, janeiro e fevereiro)
   if (crossYear) {
-    if (meses.length === 1) return meses[0]; // Fallback
+    if (meses.length === 1) return meses[0]; 
     var ultimoMes = meses.pop();
     return meses.join(", ") + " e " + ultimoMes;
   } 
-  // Se for mesmo ano (ex: outubro/novembro)
   else {
     return meses.join("/");
   }
 }
+
 function validarData(str) {
     if (!str) return null;
     var partes = str.split('/');
@@ -1392,7 +1338,7 @@ function numeroPorExtensoSimples(n) {
 
 function buscarDadosFinanceirosD89Map(cpfRaw, mesIndex, anoStr, cache, ss) {
   if (mesIndex < 0 || mesIndex > 11) return { encontrado: false };
-  var cpf = (cpfRaw || "").toString().replace(/\D/g, '');
+  var cpfLimpo = (cpfRaw || "").toString().replace(/\D/g, '');
   var nomeAba = "D89 - " + MESES_ABREV[mesIndex] + "/" + anoStr;
   if (!cache[nomeAba]) {
     cache[nomeAba] = {}; 
@@ -1411,7 +1357,7 @@ function buscarDadosFinanceirosD89Map(cpfRaw, mesIndex, anoStr, cache, ss) {
       }
     }
   }
-  var item = cache[nomeAba][cpf];
+  var item = cache[nomeAba][cpfLimpo];
   return item ? { encontrado: true, posto: item.posto, valor: item.valor } : { encontrado: false, valor: 0, posto: "" };
 }
 
@@ -1420,6 +1366,7 @@ function encontrarLegislacao(motivo) {
   for (var chave in MAPA_LEGISLACAO) if (m.includes(chave)) return MAPA_LEGISLACAO[chave];
   return "LEGISLAÇÃO NÃO ENCONTRADA"; 
 }
+
 function carregarMapaHistorico(ss) {
   var mapa = new Set();
   var sheet = ss.getSheetByName(ABA_HISTORICO);
@@ -1429,8 +1376,6 @@ function carregarMapaHistorico(ss) {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return mapa;
   
-  // Lê colunas A até F (Indices 0 a 5)
-  // Estrutura esperada: [Timestamp, CPF, Motivo, Inicio, Fim, AbaOrigem]
   var dados = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
   
   for (var i = 0; i < dados.length; i++) {
@@ -1441,16 +1386,15 @@ function carregarMapaHistorico(ss) {
     if (cpfRaw && inicio && fim) {
       var cpfLimpo = cpfRaw.replace(/\D/g, "");
       
-      // Garante que a data vire string dd/MM/yyyy para a chave funcionar
       var inicioStr = (inicio instanceof Date) ? Utilities.formatDate(inicio, Session.getScriptTimeZone(), "dd/MM/yyyy") : inicio;
       var fimStr = (fim instanceof Date) ? Utilities.formatDate(fim, Session.getScriptTimeZone(), "dd/MM/yyyy") : fim;
       
-      // Chave única: CPF + DataInicio + DataFim
       mapa.add(cpfLimpo + "|" + inicioStr + "|" + fimStr);
     }
   }
   return mapa;
 }
+
 function arquivarFechamentoMensal() {
   var ui = SpreadsheetApp.getUi();
   var resposta = ui.alert(
@@ -1463,7 +1407,6 @@ function arquivarFechamentoMensal() {
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
-  // 1. Abas que GERAM histórico (apenas a base de dados)
   var abasOrigem = [PLANILHA_1414, PLANILHA_DESCONTO]; 
   var sheetHistorico = ss.getSheetByName(ABA_HISTORICO);
 
@@ -1475,7 +1418,6 @@ function arquivarFechamentoMensal() {
   var dadosParaArquivar = [];
   var dataAtual = new Date(); 
 
-  // --- FASE 1: EXTRAIR E SALVAR ---
   abasOrigem.forEach(function(nomeAba) {
     var sheet = ss.getSheetByName(nomeAba);
     if (!sheet) return;
@@ -1488,10 +1430,10 @@ function arquivarFechamentoMensal() {
     var idxMotivo = (layout === "1414") ? COLUNAS_CFG.P1414.MOTIVO : COLUNAS_CFG.LOTE.MOTIVO;
 
     for (var i = 0; i < dados.length; i++) {
-      var cpf = (dados[i][0] || "").toString().trim();
+      var cpfLinha = (dados[i][0] || "").toString().trim();
       var motivoRaw = (dados[i][idxMotivo] || "").toString().trim();
 
-      if (cpf && motivoRaw) {
+      if (cpfLinha && motivoRaw) {
         var motivoNorm = normalizarMotivoLote(motivoRaw, layout);
         
         var infoData = null;
@@ -1502,11 +1444,11 @@ function arquivarFechamentoMensal() {
         }
 
         if (infoData && infoData.inicio && infoData.fim) {
-           var cpfLimpo = cpf.replace(/\D/g, ""); 
+           var cpfLimpoStr = cpfLinha.replace(/\D/g, ""); 
            
            dadosParaArquivar.push([
              dataAtual,
-             cpfLimpo,
+             cpfLimpoStr,
              motivoNorm,
              infoData.inicio,
              infoData.fim,
@@ -1522,8 +1464,6 @@ function arquivarFechamentoMensal() {
     sheetHistorico.getRange(primeiraLinhaVazia, 1, dadosParaArquivar.length, 6).setValues(dadosParaArquivar);
   }
 
-  // --- FASE 2: FAXINA GERAL ---
-  // Incluímos a aba Desconto Integral na lista de limpeza, mas ela não foi arquivada acima
   var abasParaLimpar = [PLANILHA_1414, PLANILHA_DESCONTO, "Desconto Integral"];
 
   abasParaLimpar.forEach(function(nomeAba) {
@@ -1531,12 +1471,11 @@ function arquivarFechamentoMensal() {
     if (sheet) {
       var lastRow = sheet.getLastRow();
       if (lastRow > 1) {
-        // Pega do início da linha 2 até o fim da aba
         var range = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn());
         
-        range.clearContent();      // Apaga os textos
-        range.setBackground(null); // Tira o fundo vermelho/amarelo/verde
-        range.clearNote();         // Apaga as notas de "Duplicado", "Absorvido", etc.
+        range.clearContent();      
+        range.setBackground(null); 
+        range.clearNote();         
       }
     }
   });
@@ -1547,6 +1486,7 @@ function arquivarFechamentoMensal() {
     ui.alert("Aviso", "As planilhas foram limpas, mas nenhum dado válido com datas foi encontrado para salvar no histórico.", ui.ButtonSet.OK);
   }
 }
+
 function obterLayout(nomeAba) {
   return (nomeAba === PLANILHA_1414) ? "1414" : "LOTE";
 }
