@@ -1,56 +1,39 @@
-# Solicitação de Code Review Técnico
+**Welcome to your Base44 project** 
 
-## Objetivo
+**About**
 
-Este projeto consiste em um script desenvolvido em Google Apps Script para automação de rotinas em Google Planilhas.
+View and Edit  your app on [Base44.com](http://Base44.com) 
 
-Solicito uma análise técnica completa do código com foco em qualidade, segurança, desempenho e escalabilidade.
+This project contains everything you need to run your app locally.
 
----
+**Edit the code in your local development environment**
 
-## Escopo da Revisão
+Any change pushed to the repo will also be reflected in the Base44 Builder.
 
-Peço que sejam avaliados os seguintes pontos:
+**Prerequisites:** 
 
-### 1. Análise de Confiabilidade
-- Identificação de possíveis erros lógicos
-- Pontos de falha em cenários extremos
-- Tratamento adequado de exceções
-- Validação de dados de entrada
-- Prevenção de inconsistências
+1. Clone the repository using the project's Git URL 
+2. Navigate to the project directory
+3. Install dependencies: `npm install`
+4. Create an `.env.local` file and set the right environment variables
 
-### 2. Performance
-- Otimização de chamadas ao SpreadsheetApp
-- Redução de operações repetitivas
-- Melhoria de eficiência em loops e buscas
-- Análise de complexidade
+```
+VITE_BASE44_APP_ID=your_app_id
+VITE_BASE44_APP_BASE_URL=your_backend_url
 
-### 3. Boas Práticas
-- Organização estrutural do código
-- Separação de responsabilidades
-- Padronização de nomenclatura
-- Legibilidade e clareza
-- Uso adequado de constantes e variáveis
+e.g.
+VITE_BASE44_APP_ID=cbef744a8545c389ef439ea6
+VITE_BASE44_APP_BASE_URL=https://my-to-do-list-81bfaad7.base44.app
+```
 
-### 4. Segurança e Robustez
-- Proteção contra entradas inválidas
-- Prevenção de sobrescrita indevida de dados
-- Tratamento seguro de dados sensíveis (ex: CPF)
+Run the app: `npm run dev`
 
-### 5. Escalabilidade
-- Comportamento com grande volume de registros
-- Sustentabilidade do código a longo prazo
-- Possíveis melhorias arquiteturais
+**Publish your changes**
 
----
+Open [Base44.com](http://Base44.com) and click on Publish.
 
-## Entregável Esperado
+**Docs & Support**
 
-- Lista detalhada de problemas encontrados
-- Justificativa técnica das melhorias sugeridas
-- Versão refatorada e otimizada do script
-- Comentários explicativos das alterações
+Documentation: [https://docs.base44.com/Integrations/Using-GitHub](https://docs.base44.com/Integrations/Using-GitHub)
 
----
-
-Objetivo final: elevar o código a um padrão profissional, robusto e preparado para crescimento.
+Support: [https://app.base44.com/support](https://app.base44.com/support)
